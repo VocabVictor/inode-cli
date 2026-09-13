@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: .exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            ext: .exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ext: ''
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            ext: ''
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            ext: ''
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            ext: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.92.0'
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Check tag matches Cargo.toml version
+        shell: bash
+        run: |
+          ver=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          tag=${GITHUB_REF_NAME#v}
+          echo "Cargo.toml version=$ver  tag=$tag"
+          [ "$ver" = "$tag" ] || { echo "tag v$tag != Cargo.toml version $ver"; exit 1; }
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          ver=${GITHUB_REF_NAME#v}
+          name=inode-v$ver-${{ matrix.target }}${{ matrix.ext }}
+          cp target/${{ matrix.target }}/release/inode${{ matrix.ext }} "$name"
+          if command -v sha256sum >/dev/null; then sha256sum "$name" > "$name.sha256"; else shasum -a 256 "$name" > "$name.sha256"; fi
+          echo "ASSET=$name" >> $GITHUB_ENV
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "inode $GITHUB_REF_NAME" --generate-notes 2>/dev/null || true
+          gh release upload "$GITHUB_REF_NAME" "$ASSET" "$ASSET.sha256" --clobber

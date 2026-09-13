@@ -1,0 +1,46 @@
+[package]
+name = "inode-cli"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.92"
+description = "Experimental cross-platform H3C SSL VPN command-line client"
+license = "MIT"
+
+[[bin]]
+name = "inode"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+ipnet = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
+getifaddrs = "0.6"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+sha2 = "0.10"
+native-tls = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["cookies"] }
+roxmltree = "0.20"
+rpassword = "7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "signal", "time"] }
+tokio-native-tls = "0.3"
+tun-rs = { version = "=2.8.8", features = ["async"] }
+url = "2"
+zeroize = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
+
+[dev-dependencies]
+rcgen = "0.14"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+
+[profile.release]
+lto = "thin"
+strip = true
