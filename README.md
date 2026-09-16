@@ -2,7 +2,7 @@
 
 Rust 编写的实验性 H3C SSL VPN 命令行客户端，目标平台为 Windows、Linux、macOS。直接实现 HTTPS 登录、`NET_EXTEND` 和 IPv4 TUN 数据转发，无需 OpenConnect 子进程。
 
-已在 Windows x64、Linux x64 编译并通过本地网关/TLS/TUN 系统测试；macOS 仅通过双架构编译检查，未做实机验证。这是实验性项目，真实网关的端到端连通仍需自行验收。
+Windows、Linux、macOS 的 x64 与 ARM64 共六个目标，都在 GitHub 托管 runner 上以管理员/root 跑过完整 CLI 系统测试：模拟网关登录、创建真实内核 TUN、经 TLS 完成 ICMP 往返、断开后回收接口与路由。但模拟网关不等于真实设备，这是实验性项目，真实 H3C 网关的端到端连通仍需自行验收。
 
 ## 构建
 
@@ -41,9 +41,9 @@ inode captcha-test captcha.png
 
 ## 验证范围
 
-测试覆盖 XML/表单转义、客户端验证码字段大小写、验证码模型权重形状与卷积/池化/旋转/缩放算子、跨源跳转拒绝、证书指纹拒绝且无 HTTP 数据泄漏、模拟 TLS 登录/会话 Cookie/隧道收发/注销、分片及合并帧、非法 IPv4 数据、三平台路由参数与失败回收。自动检查 src/tests/examples 下每个 Rust 文件均不超过 300 行。`examples/system_e2e.rs` 在管理员/root 环境运行完整 CLI，通过测试地址 192.0.2.2 的 ICMP 验证实际内核 TUN 与 TLS 数据路径。模拟网关仍不证明真实设备协议兼容性。`doctor` 仅检查本地前提，不证明实际连通。
+测试覆盖 XML/表单转义、客户端验证码字段大小写、验证码模型权重形状与卷积/池化/旋转/缩放算子、跨源跳转拒绝、证书指纹拒绝且无 HTTP 数据泄漏、模拟 TLS 登录/会话 Cookie/隧道收发/注销、分片及合并帧、非法 IPv4 数据、三平台路由参数与失败回收。自动检查 src/tests/examples 下每个 Rust 文件均不超过 300 行。`examples/system_e2e.rs` 在管理员/root 环境运行完整 CLI，通过测试地址 192.0.2.2 的 ICMP 验证实际内核 TUN 与 TLS 数据路径，并断言退出后没有残留接口和路由；`.github/workflows/system-e2e.yml` 在六个 OS/架构组合上运行它。模拟网关仍不证明真实设备协议兼容性。`doctor` 仅检查本地前提，不证明实际连通。
 
-当前仅支持 IPv4；不自动应用网关下发的路由/DNS，不支持断线重连、后台服务和 UDP 加速。内核接口、路由和真实内网连通仍需逐平台验收。
+当前仅支持 IPv4；不自动应用网关下发的路由/DNS，不支持断线重连、保活心跳、后台服务和 UDP 加速。空闲连接可能被 NAT 或防火墙静默回收，链路中断后需要手工重连。
 
 协议研究参考 [OpenConnect H3C 草案 MR 397](https://gitlab.com/openconnect/openconnect/-/merge_requests/397) 及目标网关公开的协议发现和登录页面。此项目不是 H3C 官方 iNode 客户端。
 
