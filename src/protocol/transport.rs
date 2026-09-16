@@ -14,6 +14,7 @@ pub struct Session {
     tls: native_tls::TlsConnector,
     pin: Option<[u8; 32]>,
     pub timeout: Duration,
+    keepalive: Option<Duration>,
 }
 
 impl Session {
@@ -44,7 +45,16 @@ impl Session {
             tls: tls.build()?,
             pin,
             timeout,
+            keepalive: None,
         })
+    }
+
+    /// TCP 层保活间隔。协议只定义了数据帧（frames.rs 要求类型 [1,0]），
+    /// 没有可用的应用层心跳，所以空闲连接只能靠 TCP keepalive 维持，
+    /// 它同时负责探测对端已经消失但没有发 FIN 的死链路。
+    pub fn with_keepalive(mut self, interval: Option<Duration>) -> Self {
+        self.keepalive = interval.filter(|d| !d.is_zero());
+        self
     }
 
     pub(super) async fn tls_stream(&self) -> Result<Tunnel> {
@@ -58,6 +68,15 @@ impl Session {
         )
         .await??;
         tcp.set_nodelay(true)?;
+        if let Some(interval) = self.keepalive {
+            // with_retries 在 Windows 上不可用，只设置空闲时间与探测间隔。
+            let keepalive = socket2::TcpKeepalive::new()
+                .with_time(interval)
+                .with_interval(interval);
+            socket2::SockRef::from(&tcp)
+                .set_tcp_keepalive(&keepalive)
+                .context("Cannot enable TCP keepalive")?;
+        }
         let stream = timeout(
             self.timeout,
             tokio_native_tls::TlsConnector::from(self.tls.clone()).connect(host, tcp),

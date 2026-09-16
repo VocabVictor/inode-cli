@@ -85,6 +85,16 @@ struct ConnectArgs {
     /// Internal IPv4 network; repeat for more networks. DNS/default route are unchanged.
     #[arg(long)]
     route: Vec<Ipv4Net>,
+    /// Consecutive tunnel reconnects before giving up; 0 exits on the first drop.
+    #[arg(long, default_value_t = 5)]
+    reconnect_attempts: u32,
+    /// TCP keepalive interval in seconds for idle tunnels; 0 disables it.
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(0..=3600))]
+    keepalive: u64,
+}
+
+fn session_with_keepalive(args: &GatewayArgs, keepalive: Option<Duration>) -> Result<Session> {
+    Ok(session(args)?.with_keepalive(keepalive))
 }
 
 fn session(args: &GatewayArgs) -> Result<Session> {
@@ -136,7 +146,8 @@ fn credentials(args: &LoginArgs) -> Result<(String, Zeroizing<String>)> {
 }
 
 async fn login(args: &LoginArgs, connect: Option<&ConnectArgs>) -> Result<()> {
-    let s = session(&args.gateway)?;
+    let keepalive = connect.map(|c| Duration::from_secs(c.keepalive));
+    let s = session_with_keepalive(&args.gateway, keepalive)?;
     let info = s.discover(args.gateway.domain.as_deref()).await?;
     ensure!(
         !info.extra_auth || info.captcha.is_some(),

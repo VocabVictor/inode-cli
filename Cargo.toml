@@ -22,6 +22,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 sha2 = "0.10"
+socket2 = "0.6"
 native-tls = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["cookies"] }
 roxmltree = "0.20"

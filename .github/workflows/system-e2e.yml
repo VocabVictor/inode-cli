@@ -41,7 +41,7 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - name: Build CLI and the privileged harness
-        run: cargo build --locked --release --target ${{ matrix.target }} --bin inode --example system_e2e
+        run: cargo build --locked --release --target ${{ matrix.target }} --bin inode --example system_e2e --example reconnect_e2e
 
       - name: Install official wintun.dll next to inode.exe
         if: runner.os == 'Windows'
@@ -70,6 +70,16 @@ jobs:
             "$dir/examples/system_e2e.exe" "$dir/inode.exe"
           else
             sudo "$dir/examples/system_e2e" "$dir/inode"
+          fi
+
+      - name: Recover from a tunnel the gateway dropped
+        shell: bash
+        run: |
+          dir=target/${{ matrix.target }}/release
+          if [ "$RUNNER_OS" = Windows ]; then
+            "$dir/examples/reconnect_e2e.exe" "$dir/inode.exe"
+          else
+            sudo "$dir/examples/reconnect_e2e" "$dir/inode"
           fi
 
       - name: Confirm no interface or test route survived
