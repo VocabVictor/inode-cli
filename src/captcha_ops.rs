@@ -126,3 +126,93 @@ pub(crate) fn resize_bilinear(src: &[f32], sw: usize, sh: usize, dw: usize, dh: 
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tensor(shape: &[usize], data: &[f32]) -> Tensor {
+        Tensor {
+            shape: shape.to_vec(),
+            data: data.to_vec(),
+        }
+    }
+
+    #[test]
+    fn softmax_normalizes_and_preserves_order() {
+        let p = softmax(&[1.0, 3.0, 2.0]);
+        assert!((p.iter().sum::<f32>() - 1.0).abs() < 1e-6);
+        assert!(p[1] > p[2] && p[2] > p[0]);
+    }
+
+    #[test]
+    fn relu_clamps_negatives() {
+        assert_eq!(relu(&[-1.0, 0.0, 2.5]), vec![0.0, 0.0, 2.5]);
+    }
+
+    #[test]
+    fn conv_with_identity_kernel_reproduces_input_plus_bias() {
+        #[rustfmt::skip]
+        let kernel = tensor(&[1, 1, 3, 3], &[
+            0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0,
+        ]);
+        let bias = tensor(&[1], &[0.5]);
+        let input = [1.0, 2.0, 3.0, 4.0];
+        let out = conv(&input, 1, 2, 2, &kernel, &bias);
+        assert_eq!(out, vec![1.5, 2.5, 3.5, 4.5]);
+    }
+
+    #[test]
+    fn conv_pads_borders_with_zero() {
+        // 全 1 的 3x3 核在 2x2 输入上：每个位置只累加落在图内的邻居。
+        let kernel = tensor(&[1, 1, 3, 3], &[1.0; 9]);
+        let bias = tensor(&[1], &[0.0]);
+        let out = conv(&[1.0, 1.0, 1.0, 1.0], 1, 2, 2, &kernel, &bias);
+        assert_eq!(out, vec![4.0, 4.0, 4.0, 4.0]);
+    }
+
+    #[test]
+    fn maxpool2_halves_each_dimension() {
+        #[rustfmt::skip]
+        let input = [
+            1.0, 2.0, 9.0, 3.0,
+            4.0, 3.0, 1.0, 0.0,
+            0.0, 0.0, 5.0, 5.0,
+            7.0, 1.0, 5.0, 5.0,
+        ];
+        assert_eq!(maxpool2(&input, 1, 4, 4), vec![4.0, 9.0, 7.0, 5.0]);
+    }
+
+    #[test]
+    fn rotate_by_zero_degrees_is_identity() {
+        let glyph: Vec<f32> = (0..GH * GW).map(|i| (i % 7) as f32).collect();
+        for (a, b) in rotate(&glyph, 0.0).iter().zip(&glyph) {
+            assert!((a - b).abs() < 1e-4, "{a} != {b}");
+        }
+    }
+
+    #[test]
+    fn rotate_keeps_energy_off_the_border() {
+        // 只在中心点亮的图旋转 180 度后，亮点仍应落在图内。
+        let mut glyph = vec![0f32; GH * GW];
+        glyph[(GH / 2) * GW + GW / 2] = 1.0;
+        let out = rotate(&glyph, 180.0);
+        assert!(out.iter().sum::<f32>() > 0.5);
+    }
+
+    #[test]
+    fn resize_bilinear_preserves_a_constant_image() {
+        let src = vec![0.25f32; 8 * 8];
+        for v in resize_bilinear(&src, 8, 8, GW, GH) {
+            assert!((v - 0.25).abs() < 1e-6, "{v}");
+        }
+    }
+
+    #[test]
+    fn resize_bilinear_emits_the_requested_size() {
+        let src: Vec<f32> = (0..6 * 4).map(|i| i as f32).collect();
+        assert_eq!(resize_bilinear(&src, 6, 4, GW, GH).len(), GW * GH);
+    }
+}

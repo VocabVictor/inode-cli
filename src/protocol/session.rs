@@ -1,9 +1,15 @@
 use super::{discovery::xml, *};
 use anyhow::{Context, Result, bail, ensure};
 use reqwest::cookie::CookieStore;
-use std::net::Ipv4Addr;
-use tokio::{io::AsyncWriteExt, time::timeout};
+use std::{net::Ipv4Addr, time::Duration};
+use tokio::{
+    io::AsyncWriteExt,
+    time::{sleep, timeout},
+};
 use zeroize::Zeroizing;
+
+/// 自动模式下两次抓取验证码之间的固定间隔。
+const CAPTCHA_REFETCH_PAUSE: Duration = Duration::from_millis(300);
 
 enum LoginOutcome {
     Success,
@@ -95,6 +101,7 @@ impl Session {
 
     /// 全自动登录：内嵌 CNN 识别验证码，只在高置信时提交，低置信免费换图。
     /// 抓图不限次（最多 max_fetch 张），提交上限 max_submit 次（防锁定）。
+    /// 每次重新抓图前固定间隔，避免连续请求触发网关风控。
     pub async fn login_auto(
         &self,
         info: &GatewayInfo,
@@ -111,7 +118,10 @@ impl Session {
         let model = crate::captcha_cnn::Model::load();
         let mut submits = 0usize;
         let mut best_seen = 0f32;
-        for _ in 0..max_fetch {
+        for attempt in 0..max_fetch {
+            if attempt > 0 {
+                sleep(CAPTCHA_REFETCH_PAUSE).await;
+            }
             let bytes = self.request_bytes(captcha_url.clone(), None, false).await?;
             let Some((code, conf)) = model.solve(&bytes) else {
                 continue; // 分割不出 4 个字形，换图

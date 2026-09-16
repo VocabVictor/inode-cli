@@ -49,6 +49,8 @@ jobs:
           tag=${GITHUB_REF_NAME#v}
           echo "Cargo.toml version=$ver  tag=$tag"
           [ "$ver" = "$tag" ] || { echo "tag v$tag != Cargo.toml version $ver"; exit 1; }
+      - name: Test before publishing
+        run: cargo test --locked --all-targets --target ${{ matrix.target }}
       - run: cargo build --locked --release --target ${{ matrix.target }}
       - name: Package
         shell: bash

@@ -206,3 +206,47 @@ fn segment(bytes: &[u8]) -> Option<Vec<Vec<f32>>> {
     }
     Some(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_model_parses_with_the_documented_shapes() {
+        let m = Model::load();
+        assert_eq!(m.c1w.shape, vec![8, 1, 3, 3]);
+        assert_eq!(m.c1b.shape, vec![8]);
+        assert_eq!(m.c2w.shape, vec![16, 8, 3, 3]);
+        assert_eq!(m.c2b.shape, vec![16]);
+        assert_eq!(m.fcw.shape, vec![560, 24]);
+        assert_eq!(m.fcb.shape, vec![24]);
+    }
+
+    #[test]
+    fn every_tensor_holds_exactly_its_shape_in_elements() {
+        let m = Model::load();
+        for t in [&m.c1w, &m.c1b, &m.c2w, &m.c2b, &m.fcw, &m.fcb] {
+            assert_eq!(t.data.len(), t.shape.iter().product::<usize>());
+            assert!(t.data.iter().all(|v| v.is_finite()));
+        }
+    }
+
+    #[test]
+    fn alphabet_matches_the_classifier_output_width() {
+        let m = Model::load();
+        assert_eq!(m.alphabet.len(), *m.fcb.shape.first().unwrap());
+        assert!(m.alphabet.iter().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn flattened_feature_width_matches_the_fully_connected_input() {
+        // 两次 3x3 same 卷积 + 两次 2x2 池化：(GH/2/2) * (GW/2/2) * 16 通道。
+        let m = Model::load();
+        assert_eq!((GH / 2 / 2) * (GW / 2 / 2) * m.c2w.shape[0], m.fcw.shape[0]);
+    }
+
+    #[test]
+    fn solve_rejects_input_that_is_not_a_decodable_image() {
+        assert!(Model::load().solve(b"not an image at all").is_none());
+    }
+}
