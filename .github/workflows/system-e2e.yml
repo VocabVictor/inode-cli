@@ -1,0 +1,84 @@
+name: System E2E
+
+# 在六个托管 runner 上以管理员/root 运行完整 CLI：真实内核 TUN + TLS 数据面 + ICMP。
+# 模拟网关是 examples/system_e2e.rs 自带的，不需要任何外部网关。
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  WINTUN_VERSION: '0.14.1'
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            wintun_arch: amd64
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            wintun_arch: arm64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.92.0'
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build CLI and the privileged harness
+        run: cargo build --locked --release --target ${{ matrix.target }} --bin inode --example system_e2e
+
+      - name: Install official wintun.dll next to inode.exe
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -fsSL -o wintun.zip "https://www.wintun.net/builds/wintun-$WINTUN_VERSION.zip"
+          unzip -q wintun.zip
+          cp "wintun/bin/${{ matrix.wintun_arch }}/wintun.dll" "target/${{ matrix.target }}/release/wintun.dll"
+          ls -l "target/${{ matrix.target }}/release/wintun.dll"
+
+      - name: Load the tun module
+        if: runner.os == 'Linux'
+        run: sudo modprobe tun || true
+
+      - name: Report local prerequisites
+        shell: bash
+        run: |
+          bin=target/${{ matrix.target }}/release/inode
+          if [ "$RUNNER_OS" = Windows ]; then "$bin.exe" doctor; else sudo "$bin" doctor; fi
+
+      - name: Full CLI end-to-end over a real kernel TUN
+        shell: bash
+        run: |
+          dir=target/${{ matrix.target }}/release
+          if [ "$RUNNER_OS" = Windows ]; then
+            "$dir/examples/system_e2e.exe" "$dir/inode.exe"
+          else
+            sudo "$dir/examples/system_e2e" "$dir/inode"
+          fi
+
+      - name: Confirm no interface or test route survived
+        if: always()
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux) ip link show | grep -i inode && exit 1; ip route | grep -F 192.0.2.2 && exit 1 ;;
+            macOS) ifconfig | grep -i inode && exit 1; netstat -rn | grep -F 192.0.2.2 && exit 1 ;;
+            Windows) route print | grep -F 192.0.2.2 && exit 1 ;;
+          esac
+          echo "No leftover interface or test route."
