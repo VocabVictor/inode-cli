@@ -248,7 +248,7 @@ async fn run(cli: Cli) -> Result<()> {
 #[tokio::main]
 async fn main() {
     if let Err(error) = run(Cli::parse()).await {
-        eprintln!("Error: {error}");
+        eprintln!("Error: {error:#}");
         std::process::exit(2);
     }
 }

@@ -112,12 +112,16 @@ async fn gateway(
                 ensure!(header.starts_with("POST /login"), "Missing login");
                 let form: Vec<_> = url::form_urlencoded::parse(&body).collect();
                 let doc = roxmltree::Document::parse(&form[0].1)?;
+                // 真实网关收到的密码经过 H3C 的逐字节 URL 编码（见
+                // protocol::discovery 的 native_url_encode），连字符会变成 %2D。
+                // 这里比对编码后的形式，顺带验证 CLI 确实做了这层编码。
+                let submitted = doc
+                    .descendants()
+                    .find(|n| n.has_tag_name("password"))
+                    .and_then(|n| n.text());
                 ensure!(
-                    doc.descendants()
-                        .find(|n| n.has_tag_name("password"))
-                        .and_then(|n| n.text())
-                        == Some("synthetic-test-password"),
-                    "Wrong synthetic password"
+                    submitted == Some("synthetic%2Dtest%2Dpassword"),
+                    "Wrong synthetic password: {submitted:?}"
                 );
                 (
                     "<data><result>Success</result></data>",
@@ -152,7 +156,7 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let url = format!("https://localhost:{}", listener.local_addr()?.port());
     let (done_tx, done_rx) = oneshot::channel();
-    let server = tokio::spawn(gateway(
+    let mut server = tokio::spawn(gateway(
         listener,
         TlsAcceptor::from(Arc::new(config)),
         done_rx,
@@ -202,8 +206,16 @@ async fn main() -> Result<()> {
         let _ = child.kill();
         let _ = child.wait();
         server.abort();
+        // 模拟网关的断言失败只会关掉连接，CLI 只看得到「连接被关闭」，
+        // 所以这里把服务端自己的错误也捞出来一起报。
+        let gateway_error =
+            match tokio::time::timeout(Duration::from_millis(500), &mut server).await {
+                Ok(Ok(Err(error))) => format!("synthetic gateway failed: {error:#}"),
+                Ok(Err(error)) => format!("synthetic gateway panicked: {error}"),
+                _ => "synthetic gateway was still waiting".to_owned(),
+            };
         anyhow::bail!(
-            "CLI failed before tunnel readiness: {}",
+            "CLI failed before tunnel readiness: {}; {gateway_error}",
             output.join().unwrap_or_default()
         );
     }
