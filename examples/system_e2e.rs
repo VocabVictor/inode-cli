@@ -172,6 +172,10 @@ async fn main() -> Result<()> {
             "--password-stdin",
             "--route",
             "192.0.2.2/32",
+            // 这个测试断言的是「远端断开 -> 回收接口和路由 -> 注销」，
+            // 所以显式关掉重连；重连路径由 reconnect_e2e 覆盖。
+            "--reconnect-attempts",
+            "0",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
