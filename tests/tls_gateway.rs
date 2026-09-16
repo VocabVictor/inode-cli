@@ -120,7 +120,7 @@ async fn full_pinned_tls_authentication_tunnel_and_logout() {
         .await
         .unwrap();
     let (mut tunnel, ip, initial) = session.open_tunnel().await.unwrap();
-    assert_eq!(ip.to_string(), "10.99.0.7");
+    assert_eq!(ip.address.unwrap().to_string(), "10.99.0.7");
     assert!(initial.is_empty());
     let mut ip = vec![0; 20];
     ip[0] = 0x45;

@@ -2,7 +2,7 @@ use crate::ConnectArgs;
 use anyhow::{Context, Result, ensure};
 use inode_cli::{
     platform::{self, Platform, Routes, SystemExecutor},
-    protocol::{self, Frames, Session},
+    protocol::{self, Frames, Session, TunnelParams},
 };
 use std::time::Duration;
 use tokio::{
@@ -45,11 +45,15 @@ pub(super) async fn connected(session: &Session, args: &ConnectArgs) -> Result<(
             .map(|s| s.ip())
             .collect();
     platform::validate_routes(&args.route, &addresses)?;
-    let (stream, address, pending) = session.open_tunnel().await?;
+    let (stream, params, pending) = session.open_tunnel().await?;
+    let address = params.address.context("Tunnel IPADDRESS header missing")?;
+    announce(&params);
+    let routes = requested_routes(args, &params)?;
+    platform::validate_routes(&routes, &addresses)?;
     // /32 avoids automatically adding the gateway's advertised broad subnet.
     let mut builder = tun_rs::DeviceBuilder::new()
         .ipv4(address, 32, None)
-        .mtu(1400);
+        .mtu(args.mtu);
     if platform != Platform::Macos {
         builder = builder.name(format!("inode{}", std::process::id()));
     }
@@ -70,7 +74,7 @@ pub(super) async fn connected(session: &Session, args: &ConnectArgs) -> Result<(
     )?;
     let name = device.name()?;
     crate::readiness::wait(&device, address).await?;
-    let _routes = Routes::install(platform, &name, &args.route, SystemExecutor)?;
+    let _routes = Routes::install(platform, &name, &routes, SystemExecutor)?;
     eprintln!(
         "Tunnel ready: {name}, IP {address}. DNS/default route unchanged. Ctrl+C disconnects."
     );
@@ -111,6 +115,9 @@ pub(super) async fn connected(session: &Session, args: &ConnectArgs) -> Result<(
             },
             _ = &mut stop => {eprintln!("Disconnecting."); return Ok(());}
         };
+        let reassigned = reassigned
+            .address
+            .context("Tunnel IPADDRESS header missing")?;
         ensure!(
             reassigned == address,
             "Gateway reassigned {reassigned} but the interface holds {address}; reconnect aborted"
@@ -119,6 +126,39 @@ pub(super) async fn connected(session: &Session, args: &ConnectArgs) -> Result<(
         eprintln!("Reconnected: {name}, IP {address}.");
         current = Some((stream, pending));
     }
+}
+
+/// 打印网关在握手里下发的内容，便于确认该用哪些 --route。
+fn announce(params: &TunnelParams) {
+    if let Some(prefix) = params.prefix_len {
+        eprintln!("Gateway assigned subnet mask /{prefix}.");
+    }
+    if !params.routes.is_empty() {
+        let list: Vec<_> = params.routes.iter().map(|r| r.to_string()).collect();
+        eprintln!("Gateway offers routes: {}", list.join(", "));
+    }
+    for entry in &params.unparsed_routes {
+        eprintln!("Ignoring unparsable gateway route: {entry}");
+    }
+}
+
+/// --route 永远优先；--gateway-routes 才会采用网关下发的网段，
+/// 且两者都要通过同一套安全校验（不得是默认路由、不得捕获网关本身）。
+fn requested_routes(args: &ConnectArgs, params: &TunnelParams) -> Result<Vec<ipnet::Ipv4Net>> {
+    if !args.gateway_routes {
+        return Ok(args.route.clone());
+    }
+    let mut routes = args.route.clone();
+    for route in &params.routes {
+        if !routes.contains(route) {
+            routes.push(*route);
+        }
+    }
+    ensure!(
+        !routes.is_empty(),
+        "Gateway advertised no usable routes; specify --route"
+    );
+    Ok(routes)
 }
 
 /// 在一条隧道上双向转发，直到链路出错或对端关闭。

@@ -63,6 +63,9 @@ async fn main() -> Result<()> {
     let tunnel = s.open_tunnel().await;
     s.logout(&info).await;
     let (_stream, ip, _) = tunnel?;
-    println!("NET_EXTEND succeeded, assigned IPv4 {ip}; session logged out");
+    println!(
+        "NET_EXTEND succeeded, assigned IPv4 {:?}; session logged out",
+        ip.address
+    );
     Ok(())
 }

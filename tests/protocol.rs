@@ -184,7 +184,7 @@ async fn handshake_preserves_first_tunnel_packet() {
         server.write_all(&wire).await.unwrap();
     });
     let (addr, mut pending) = read_handshake(&mut client).await.unwrap();
-    assert_eq!(addr.to_string(), "10.1.2.3");
+    assert_eq!(addr.address.unwrap().to_string(), "10.1.2.3");
     client.read_to_end(&mut pending).await.unwrap();
     assert_eq!(pending, expected);
     task.await.unwrap();
@@ -230,4 +230,69 @@ fn routes_cannot_capture_gateway_or_default_route() {
     assert!(platform::validate_routes(&["10.0.0.0/8".parse().unwrap()], &ips).is_err());
     assert!(platform::validate_routes(&["0.0.0.0/0".parse().unwrap()], &ips).is_err());
     assert!(platform::validate_routes(&["192.168.3.0/24".parse().unwrap()], &ips).is_ok());
+}
+
+async fn handshake(headers: &str) -> Result<inode_cli::protocol::TunnelParams, String> {
+    let (mut server, mut client) = tokio::io::duplex(4096);
+    tokio::io::AsyncWriteExt::write_all(&mut server, headers.as_bytes())
+        .await
+        .unwrap();
+    drop(server);
+    read_handshake(&mut client)
+        .await
+        .map(|(params, _)| params)
+        .map_err(|e| e.to_string())
+}
+
+#[tokio::test]
+async fn handshake_takes_the_subnet_mask_and_routes_the_gateway_advertises() {
+    let params = handshake(
+        "HTTP/1.1 200 OK\r\nIPADDRESS: 10.1.2.3\r\nSUBNETMASK: 24\r\n\
+         ROUTES: 10.20.0.0/16;172.16.5.0/24\r\n\r\n",
+    )
+    .await
+    .unwrap();
+    assert_eq!(params.address.unwrap().to_string(), "10.1.2.3");
+    assert_eq!(params.prefix_len, Some(24));
+    let routes: Vec<_> = params.routes.iter().map(|r| r.to_string()).collect();
+    assert_eq!(routes, ["10.20.0.0/16", "172.16.5.0/24"]);
+    assert!(params.unparsed_routes.is_empty());
+}
+
+#[tokio::test]
+async fn advertised_routes_are_reduced_to_their_network_address() {
+    // 网关常把主机位一起下发；直接安装 10.20.3.7/16 会被平台拒绝。
+    let params =
+        handshake("HTTP/1.1 200 OK\r\nIPADDRESS: 10.1.2.3\r\nROUTES: 10.20.3.7/16\r\n\r\n")
+            .await
+            .unwrap();
+    assert_eq!(params.routes[0].to_string(), "10.20.0.0/16");
+}
+
+#[tokio::test]
+async fn unparsable_routes_are_kept_aside_rather_than_installed() {
+    let params = handshake(
+        "HTTP/1.1 200 OK\r\nIPADDRESS: 10.1.2.3\r\n\
+         ROUTES: 10.20.0.0/16;not-a-route;;fe80::/64\r\n\r\n",
+    )
+    .await
+    .unwrap();
+    assert_eq!(params.routes.len(), 1);
+    assert_eq!(params.unparsed_routes, ["not-a-route", "fe80::/64"]);
+}
+
+#[tokio::test]
+async fn an_out_of_range_subnet_mask_is_rejected() {
+    let error = handshake("HTTP/1.1 200 OK\r\nIPADDRESS: 10.1.2.3\r\nSUBNETMASK: 33\r\n\r\n")
+        .await
+        .unwrap_err();
+    assert!(error.contains("out of range"), "{error}");
+}
+
+#[tokio::test]
+async fn a_handshake_without_an_address_is_still_rejected() {
+    let error = handshake("HTTP/1.1 200 OK\r\nSUBNETMASK: 24\r\n\r\n")
+        .await
+        .unwrap_err();
+    assert!(error.contains("IPADDRESS"), "{error}");
 }

@@ -91,6 +91,12 @@ struct ConnectArgs {
     /// TCP keepalive interval in seconds for idle tunnels; 0 disables it.
     #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(0..=3600))]
     keepalive: u64,
+    /// Also install the routes the gateway advertises in its NET_EXTEND response.
+    #[arg(long)]
+    gateway_routes: bool,
+    /// Tunnel interface MTU. The protocol carries no MTU, so this is a local choice.
+    #[arg(long, default_value_t = 1400, value_parser = clap::value_parser!(u16).range(576..=1500))]
+    mtu: u16,
 }
 
 fn session_with_keepalive(args: &GatewayArgs, keepalive: Option<Duration>) -> Result<Session> {

@@ -60,7 +60,8 @@ async fn gateway(
         if step == 2 {
             ensure!(header.starts_with("NET_EXTEND /"), "Missing tunnel request");
             ensure!(header.contains("svpnginfo=synthetic"), "Missing session");
-            tls.write_all(b"HTTP/1.1 200 OK\r\nIPADDRESS: 192.0.2.1\r\n\r\n")
+            // 连同网关下发的掩码与授权网段一起回，客户端要据此装路由。
+            tls.write_all(b"HTTP/1.1 200 OK\r\nIPADDRESS: 192.0.2.1\r\nSUBNETMASK: 24\r\nROUTES: 192.0.2.2/32\r\n\r\n")
                 .await?;
             let mut decoder = Frames::default();
             let mut buf = vec![0; 65536];
@@ -170,8 +171,9 @@ async fn main() -> Result<()> {
             "--user",
             "synthetic",
             "--password-stdin",
-            "--route",
-            "192.0.2.2/32",
+            // 不传 --route：路由完全来自网关下发的 ROUTES，
+            // 装错或没装，下面的 ICMP 就不通。
+            "--gateway-routes",
             // 这个测试断言的是「远端断开 -> 回收接口和路由 -> 注销」，
             // 所以显式关掉重连；重连路径由 reconnect_e2e 覆盖。
             "--reconnect-attempts",

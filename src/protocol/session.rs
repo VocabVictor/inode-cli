@@ -1,7 +1,7 @@
 use super::{discovery::xml, *};
 use anyhow::{Context, Result, bail, ensure};
 use reqwest::cookie::CookieStore;
-use std::{net::Ipv4Addr, time::Duration};
+use std::time::Duration;
 use tokio::{
     io::AsyncWriteExt,
     time::{sleep, timeout},
@@ -173,7 +173,7 @@ impl Session {
         Ok(Zeroizing::new(value.to_owned()))
     }
 
-    pub async fn open_tunnel(&self) -> Result<(Tunnel, Ipv4Addr, Vec<u8>)> {
+    pub async fn open_tunnel(&self) -> Result<(Tunnel, TunnelParams, Vec<u8>)> {
         let mut stream = self.tls_stream().await?;
         let authority = &self.gateway[url::Position::BeforeHost..url::Position::AfterPort];
         let request = Zeroizing::new(format!(
@@ -181,8 +181,8 @@ impl Session {
             self.cookie()?.as_str()
         ));
         timeout(self.timeout, stream.write_all(request.as_bytes())).await??;
-        let (address, pending) = timeout(self.timeout, read_handshake(&mut stream)).await??;
-        Ok((stream, address, pending))
+        let (params, pending) = timeout(self.timeout, read_handshake(&mut stream)).await??;
+        Ok((stream, params, pending))
     }
 
     pub async fn logout(&self, info: &GatewayInfo) {
