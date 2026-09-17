@@ -62,6 +62,13 @@ async fn gateway(
             );
             tunnels += 1;
             seen.send(Seen::Tunnel).await?;
+            if tunnels == 2 {
+                // 拒绝第一次重连：客户端必须继续退避重试，而不是就此放弃。
+                // 这条路径曾经踩到 current 已被 take 的空洞，直接以
+                // "Tunnel stream missing" 退出，真实网关上把 5 次重试变成 1 次。
+                drop(tls);
+                continue;
+            }
             tls.write_all(b"HTTP/1.1 200 OK\r\nIPADDRESS: 192.0.2.1\r\n\r\n")
                 .await?;
             if tunnels == 1 {
@@ -177,11 +184,14 @@ async fn main() -> Result<()> {
             ensure!(step == expected, "Expected {expected:?}, saw {step:?}");
         }
         // 重连必须复用会话 Cookie 重开隧道，而不是重新登录。
-        let step = seen.recv().await.context("No reconnect arrived")?;
-        ensure!(
-            step == Seen::Tunnel,
-            "Reconnect should reuse the session, but the CLI sent {step:?}"
-        );
+        // 第一次重连被网关拒绝，客户端要继续重试并在第二次成功。
+        for attempt in 1..=2 {
+            let step = seen.recv().await.context("No reconnect arrived")?;
+            ensure!(
+                step == Seen::Tunnel,
+                "Reconnect {attempt} should reuse the session, but the CLI sent {step:?}"
+            );
+        }
         let line = reconnected
             .recv()
             .await

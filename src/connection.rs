@@ -83,37 +83,60 @@ pub(super) async fn connected(session: &Session, args: &ConnectArgs) -> Result<(
     let mut current = Some((stream, pending));
     let mut failures = 0u32;
     loop {
-        let (stream, pending) = current.take().context("Tunnel stream missing")?;
-        let lost = tokio::select! {
-            result = forward(&device, stream, pending, session.timeout) => result,
-            _ = &mut stop => {eprintln!("Disconnecting."); return Ok(());}
-        };
-        let lost = match lost {
-            Ok(()) => anyhow::anyhow!("VPN gateway disconnected"),
-            Err(error) => error,
-        };
-        ensure!(
-            failures < args.reconnect_attempts,
-            "{lost}; giving up after {failures} reconnect attempts"
-        );
-        failures += 1;
-        let backoff = (BACKOFF_FIRST * 2u32.saturating_pow(failures - 1)).min(BACKOFF_MAX);
-        eprintln!(
-            "Tunnel lost: {lost:#}. Reconnect {failures}/{} in {}s.",
-            args.reconnect_attempts,
-            backoff.as_secs()
-        );
-        tokio::select! {
-            _ = tokio::time::sleep(backoff) => {}
-            _ = &mut stop => {eprintln!("Disconnecting."); return Ok(());}
+        // 有活隧道就先跑它；隧道断了只记一次失败，然后落到下面的重连。
+        if let Some((stream, pending)) = current.take() {
+            let lost = tokio::select! {
+                result = forward(&device, stream, pending, session.timeout) => result,
+                _ = &mut stop => {eprintln!("Disconnecting."); return Ok(());}
+            };
+            let lost = match lost {
+                Ok(()) => anyhow::anyhow!("VPN gateway disconnected"),
+                Err(error) => error,
+            };
+            failures += 1;
+            ensure!(
+                failures <= args.reconnect_attempts,
+                "{lost}; giving up after {} reconnect attempts",
+                args.reconnect_attempts
+            );
+            let backoff = backoff(failures);
+            eprintln!(
+                "Tunnel lost: {lost:#}. Reconnect {failures}/{} in {}s.",
+                args.reconnect_attempts,
+                backoff.as_secs()
+            );
+            tokio::select! {
+                _ = tokio::time::sleep(backoff) => {}
+                _ = &mut stop => {eprintln!("Disconnecting."); return Ok(());}
+            }
         }
         // 复用已有会话 Cookie 重开隧道；接口和路由保持不动。
-        let (stream, reassigned, pending) = tokio::select! {
-            result = session.open_tunnel() => match result {
-                Ok(tunnel) => tunnel,
-                Err(error) => {eprintln!("Reconnect failed: {error:#}"); continue;}
-            },
+        // 重连本身失败也要继续退避重试，直到用尽 --reconnect-attempts。
+        let opened = tokio::select! {
+            result = session.open_tunnel() => result,
             _ = &mut stop => {eprintln!("Disconnecting."); return Ok(());}
+        };
+        let (stream, reassigned, pending) = match opened {
+            Ok(tunnel) => tunnel,
+            Err(error) => {
+                failures += 1;
+                ensure!(
+                    failures <= args.reconnect_attempts,
+                    "{error:#}; giving up after {} reconnect attempts",
+                    args.reconnect_attempts
+                );
+                let backoff = backoff(failures);
+                eprintln!(
+                    "Reconnect failed: {error:#}. Retry {failures}/{} in {}s.",
+                    args.reconnect_attempts,
+                    backoff.as_secs()
+                );
+                tokio::select! {
+                    _ = tokio::time::sleep(backoff) => {}
+                    _ = &mut stop => {eprintln!("Disconnecting."); return Ok(());}
+                }
+                continue;
+            }
         };
         let reassigned = reassigned
             .address
@@ -126,6 +149,11 @@ pub(super) async fn connected(session: &Session, args: &ConnectArgs) -> Result<(
         eprintln!("Reconnected: {name}, IP {address}.");
         current = Some((stream, pending));
     }
+}
+
+/// 第 n 次失败的退避：1s 起翻倍，封顶 BACKOFF_MAX。
+fn backoff(failures: u32) -> Duration {
+    (BACKOFF_FIRST * 2u32.saturating_pow(failures.saturating_sub(1))).min(BACKOFF_MAX)
 }
 
 /// 打印网关在握手里下发的内容，便于确认该用哪些 --route。
