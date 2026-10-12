@@ -5,6 +5,7 @@ use inode_cli::{
     protocol::{self, Session},
 };
 use ipnet::Ipv4Net;
+use url::Url;
 use serde::Serialize;
 use std::{
     io::{self, BufRead, Write},
@@ -55,6 +56,10 @@ struct GatewayArgs {
     domain: Option<String>,
     #[arg(long, default_value_t = 15, value_parser = clap::value_parser!(u64).range(1..=120))]
     timeout: u64,
+    /// HTTP proxy for reaching the gateway, e.g. http://127.0.0.1:1080.
+    /// Also read from INODE_PROXY. The CONNECT tunnel carries all traffic.
+    #[arg(long)]
+    proxy: Option<String>,
 }
 #[derive(Args)]
 struct LoginArgs {
@@ -110,12 +115,20 @@ fn session(args: &GatewayArgs) -> Result<Session> {
         .map(std::fs::read)
         .transpose()
         .context("Unable to read CA file")?;
-    Session::new(
+    let proxy = args
+        .proxy
+        .clone()
+        .or_else(|| std::env::var("INODE_PROXY").ok())
+        .map(|p| Url::parse(&p))
+        .transpose()
+        .context("Invalid proxy URL")?;
+    Ok(Session::new(
         protocol::gateway(&args.gateway)?,
         ca.as_deref(),
         args.servercert.as_deref(),
         Duration::from_secs(args.timeout),
-    )
+    )?
+    .with_proxy(proxy))
 }
 
 fn credentials(args: &LoginArgs) -> Result<(String, Zeroizing<String>)> {

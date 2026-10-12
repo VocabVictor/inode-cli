@@ -15,6 +15,7 @@ pub struct Session {
     pin: Option<[u8; 32]>,
     pub timeout: Duration,
     keepalive: Option<Duration>,
+    proxy: Option<Url>,
 }
 
 impl Session {
@@ -46,6 +47,7 @@ impl Session {
             pin,
             timeout,
             keepalive: None,
+            proxy: None,
         })
     }
 
@@ -57,16 +59,55 @@ impl Session {
         self
     }
 
+    /// 经 HTTP 代理（CONNECT 隧道）连网关。代理只影响控制/隧道连接的传输层。
+    pub fn with_proxy(mut self, proxy: Option<Url>) -> Self {
+        self.proxy = proxy.filter(|u| u.scheme() == "http" || u.scheme() == "https");
+        self
+    }
+
     pub(super) async fn tls_stream(&self) -> Result<Tunnel> {
         let host = self
             .gateway
             .host_str()
             .context("Missing gateway hostname")?;
-        let tcp = timeout(
-            self.timeout,
-            TcpStream::connect((host, self.gateway.port_or_known_default().unwrap())),
-        )
-        .await??;
+        let port = self.gateway.port_or_known_default().unwrap();
+        let tcp: TcpStream = match &self.proxy {
+            Some(proxy) => {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let phost = proxy.host_str().context("Proxy URL missing host")?;
+                let pport = proxy.port_or_known_default().unwrap_or(80);
+                let mut stream =
+                    timeout(self.timeout, TcpStream::connect((phost, pport))).await??;
+                stream.set_nodelay(true)?;
+                let target = format!("{host}:{port}");
+                let req = format!("CONNECT {target} HTTP/1.1{cr}{lf}Host: {target}{cr}{lf}{cr}{lf}",
+                    cr = '\r', lf = '\n');
+                stream.write_all(req.as_bytes()).await
+                    .context("Cannot send CONNECT to proxy")?;
+                let mut buf: Vec<u8> = Vec::new();
+                let mut chunk = [0u8; 1024];
+                let end_marker: [u8; 4] = [b'\r', b'\n', b'\r', b'\n'];
+                loop {
+                    let n = timeout(self.timeout, stream.read(&mut chunk))
+                        .await
+                        .context("Timeout reading proxy response")??;
+                    ensure!(n > 0, "Proxy closed connection during CONNECT");
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.windows(4).any(|w| w == end_marker) {
+                        break;
+                    }
+                    ensure!(buf.len() <= 8192, "Proxy CONNECT response too large");
+                }
+                let head = String::from_utf8_lossy(&buf);
+                let first = head.lines().next().unwrap_or_default();
+                ensure!(
+                    first.contains(" 200 "),
+                    "Proxy CONNECT failed: {first}"
+                );
+                stream
+            }
+            None => timeout(self.timeout, TcpStream::connect((host, port))).await??,
+        };
         tcp.set_nodelay(true)?;
         if let Some(interval) = self.keepalive {
             // with_retries 在 Windows 上不可用，只设置空闲时间与探测间隔。
