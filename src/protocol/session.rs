@@ -79,6 +79,16 @@ impl Session {
             return Ok(LoginOutcome::Success);
         }
         let doc = xml(&body)?;
+        match super::password_prompt::challenge_type(&doc) {
+            Some("PROMPTPWD") => {
+                self.continue_password_prompt(username, password).await?;
+                return Ok(LoginOutcome::Success);
+            }
+            Some("CHANGEPWD") => bail!(
+                "password change required by gateway; user action required; no automatic retries"
+            ),
+            _ => {}
+        }
         let message = super::errors::response_message(&doc);
         if ["verify", "vldcode", "code", "captcha", "验证码"]
             .iter()
@@ -163,7 +173,7 @@ impl Session {
         );
     }
 
-    fn cookie(&self) -> Result<Zeroizing<String>> {
+    pub(super) fn cookie(&self) -> Result<Zeroizing<String>> {
         let cookie = self
             .jar
             .cookies(&self.gateway)

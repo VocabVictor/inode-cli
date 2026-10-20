@@ -137,11 +137,12 @@ impl Session {
         Ok(stream)
     }
 
-    async fn single_request(
+    pub(super) async fn single_request(
         &self,
         url: &Url,
         body: Option<&str>,
         discovery: bool,
+        content_type: &str,
     ) -> Result<(hyper::StatusCode, hyper::HeaderMap, Vec<u8>)> {
         let stream = self.tls_stream().await?;
         let (mut sender, connection) =
@@ -171,7 +172,7 @@ impl Session {
             }
             if body.is_some() {
                 // Native iNode V7 uses text/html for its XML request form.
-                req = req.header("Content-Type", "text/html");
+                req = req.header("Content-Type", content_type);
             }
             let req = req.body(Full::new(Bytes::copy_from_slice(
                 body.unwrap_or("").as_bytes(),
@@ -216,7 +217,7 @@ impl Session {
         for _ in 0..6 {
             let (status, headers, bytes) = timeout(
                 self.timeout,
-                self.single_request(&current, body.as_deref(), discovery),
+                self.single_request(&current, body.as_deref(), discovery, "text/html"),
             )
             .await??;
             self.jar

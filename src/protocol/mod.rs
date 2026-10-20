@@ -4,6 +4,7 @@ pub use client::ClientInfo;
 mod errors;
 pub use errors::{authentication_error, authentication_summary};
 mod frames;
+mod password_prompt;
 mod session;
 mod transport;
 mod version;
