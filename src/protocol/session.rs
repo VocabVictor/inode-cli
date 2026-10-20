@@ -79,23 +79,27 @@ impl Session {
             return Ok(LoginOutcome::Success);
         }
         let doc = xml(&body)?;
-        let message = doc
-            .descendants()
-            .filter(|n| n.is_element())
-            .filter(|n| {
-                ["replyMessage", "errorMsg", "result", "type"].contains(&n.tag_name().name())
-            })
-            .filter_map(|n| n.text())
-            .collect::<Vec<_>>()
-            .join(" ")
-            .to_lowercase();
+        let message = super::errors::response_message(&doc);
         if ["verify", "vldcode", "code", "captcha", "验证码"]
             .iter()
             .any(|k| message.contains(k))
         {
             Ok(LoginOutcome::VerifyCode)
         } else {
-            Ok(LoginOutcome::Other(authentication_summary(message.trim())))
+            let fields = doc
+                .descendants()
+                .filter(|n| n.is_element() && !n.children().any(|c| c.is_element()))
+                .map(|n| n.tag_name().name())
+                .filter(|s| {
+                    s.len() <= 32 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                })
+                .take(16)
+                .collect::<Vec<_>>()
+                .join(",");
+            Ok(LoginOutcome::Other(format!(
+                "{}; response fields: {fields}",
+                authentication_summary(message.trim())
+            )))
         }
     }
 

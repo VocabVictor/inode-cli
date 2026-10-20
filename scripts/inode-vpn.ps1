@@ -59,8 +59,8 @@ while ($true) {
     # 只匹配真正的认证失败。"CAPTCHA XXXX rejected (submit 1/3); refetching" 是
     # 验证码重抓的正常过程，之前裸匹配 'rejected' 会把成功的会话误判成认证失败，
     # 导致守护 exit 3 停摆（2026-09-14 至 09-16 就这样停了两天）。
-    if ($text -match 'authentication failed|may lock the account|Password is required') {
-        Log "认证类失败，停止自动重试以免锁号。请检查密码后重新运行 inode-vpn-setup.ps1"
+    if ($text -match 'authentication failed|may lock the account|account or source is locked|verification code rejected|Password is required') {
+        Log "网关拒绝认证，停止自动重试以免锁号。请查看上方脱敏原因；不能仅据此认定密码错误。"
         exit 3
     }
     Log "retry in ${RetryDelay}s"

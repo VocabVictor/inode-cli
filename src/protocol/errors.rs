@@ -41,12 +41,80 @@ pub fn authentication_summary(message: &str) -> String {
             "; remaining failed attempts before lockout: {count}"
         ));
     }
+    for (label, patterns) in [
+        (
+            "invalid credentials",
+            &[
+                "username or password",
+                "user name or password",
+                "用户名或密码",
+                "invalid password",
+                "incorrect password",
+            ][..],
+        ),
+        (
+            "password change required",
+            &[
+                "change password",
+                "change your password",
+                "password has expired",
+                "修改密码",
+                "密码已过期",
+            ][..],
+        ),
+        (
+            "authentication server unavailable",
+            &["authentication server", "radius server", "认证服务器"][..],
+        ),
+        ("password", &["password", "密码"][..]),
+        ("expired", &["expired", "过期"][..]),
+        ("disabled", &["disabled", "禁用"][..]),
+        (
+            "concurrent",
+            &["already online", "already logged", "concurrent", "同时在线"][..],
+        ),
+        (
+            "policy",
+            &["not allowed", "permission", "denied", "无权限"][..],
+        ),
+    ] {
+        if patterns.iter().any(|p| lower.contains(p)) {
+            summary.push_str(&format!("; gateway mentions {label}"));
+        }
+    }
     summary
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gateway_message_is_not_lost_or_confused_with_sensitive_fields() {
+        for tag in [
+            "message",
+            "replyMessage",
+            "errorMsg",
+            "ErrorMessage",
+            "reason",
+        ] {
+            let body = format!(
+                "<data><result>Failed</result><{tag}>Invalid password</{tag}><cookie>synthetic-secret</cookie></data>"
+            );
+            let doc = roxmltree::Document::parse(&body).unwrap();
+            let message = response_message(&doc);
+            assert!(authentication_summary(&message).contains("gateway mentions password"));
+            assert!(!message.contains("synthetic-secret"));
+        }
+        let doc = roxmltree::Document::parse(
+            "<data><message>Verification code rejected</message></data>",
+        )
+        .unwrap();
+        assert_eq!(
+            authentication_error(&response_message(&doc)),
+            "verification code rejected"
+        );
+    }
 
     #[test]
     fn only_a_recognized_lockout_count_is_reported() {
@@ -59,4 +127,24 @@ mod tests {
             assert!(!authentication_summary(&message).contains(untrusted));
         }
     }
+}
+pub(super) fn response_message(doc: &roxmltree::Document<'_>) -> String {
+    doc.descendants()
+        .filter(|n| n.is_element())
+        .filter(|n| {
+            [
+                "replymessage",
+                "errormsg",
+                "errormessage",
+                "message",
+                "reason",
+                "result",
+                "type",
+            ]
+            .contains(&n.tag_name().name().to_ascii_lowercase().as_str())
+        })
+        .filter_map(|n| n.text())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
