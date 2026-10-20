@@ -1,33 +1,23 @@
 ﻿#Requires -Version 7
 # iNode VPN 守护：读取 DPAPI 加密的密码，循环拉起 inode connect。
-# inode 隧道断开先复用会话重连；短时恢复失败后由守护重新选择链路。
+# inode 隧道断开先复用会话重连；短时恢复失败后由守护重新直连。
 # 本脚本的循环退化为兜底：只有会话 Cookie 失效、需要重新登录时才会用到。
 # 由计划任务 "inode-vpn"（最高权限）在登录时启动，也可手动运行。
-# proxy.txt 提供备用代理；显式 -Proxy 才固定走代理。
 param(
     [string]$Gateway = 'https://222.223.112.208:64441',
     [string]$ServerCert = '62A24E11C865EEDBD176363AB74C6473B8A24C75C1FB961EC002FBC74929854B',
     [string]$User = 'aicp-140',
     [string[]]$Routes = @('10.0.0.0/8','172.16.0.0/16','222.223.106.147/32','100.125.2.0/23'),
-    [int]$RetryDelay = 3,
-    # 显式指定时固定使用该 HTTP 代理。
-    [string]$Proxy = ''
+    [int]$RetryDelay = 3
 )
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'inode-process-output.ps1')
-. (Join-Path $PSScriptRoot 'inode-transport.ps1')
 $dir = Join-Path $env:LOCALAPPDATA 'inode'
 $credFile = Join-Path $dir 'cred.dpapi'
 $log = Join-Path $dir 'vpn.log'
 $inode = Join-Path $env:USERPROFILE '.local\bin\inode.exe'
-$forceProxy = $PSBoundParameters.ContainsKey('Proxy') -and [bool]$Proxy
-Remove-Item Env:INODE_PROXY -ErrorAction SilentlyContinue
-
-# 文件中的代理只在直连探测失败后使用。
-$proxyFile = Join-Path $dir 'proxy.txt'
-if (-not $Proxy -and (Test-Path -LiteralPath $proxyFile)) {
-    $t = (Get-Content -LiteralPath $proxyFile -Raw).Trim()
-    if ($t) { $Proxy = $t }
+foreach ($name in @('INODE_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy')) {
+    Remove-Item "Env:$name" -ErrorAction SilentlyContinue
 }
 
 function Log($m) { "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $m" | Tee-Object -FilePath $log -Append }
@@ -37,24 +27,17 @@ $sec = Get-Content -LiteralPath $credFile | ConvertTo-SecureString
 $plain = [Runtime.InteropServices.Marshal]::PtrToStringUni([Runtime.InteropServices.Marshal]::SecureStringToGlobalAllocUnicode($sec))
 
 while ($true) {
-    $transport = Select-InodeTransport -Proxy $Proxy -ForceProxy:$forceProxy -Probe {
-        param($candidate)
-        $probeArgs = @('probe', $Gateway, '--servercert', $ServerCert, '--timeout', '8')
-        if ($candidate) { $probeArgs += @('--proxy', $candidate) }
-        & $inode @probeArgs *> $null
-        $LASTEXITCODE -eq 0
-    }
-    if (-not $transport.Ready) {
-        Log "Gateway transport unavailable; no authentication attempted; retry in ${RetryDelay}s"
+    & $inode probe $Gateway --servercert $ServerCert --timeout 8 *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Log "Direct gateway unavailable; no authentication attempted; retry in ${RetryDelay}s"
         Start-Sleep -Seconds $RetryDelay
         continue
     }
-    Log "connect -> $Gateway (user $User, transport=$($transport.Mode))"
+    Log "connect -> $Gateway (user $User, transport=direct)"
     $psi = [Diagnostics.ProcessStartInfo]::new($inode)
     foreach ($a in @('connect', $Gateway, '--servercert', $ServerCert, '--user', $User, '--password-stdin')) { $psi.ArgumentList.Add($a) }
     foreach ($r in $Routes) { $psi.ArgumentList.Add('--route'); $psi.ArgumentList.Add($r) }
     foreach ($a in @('--timeout', '8', '--reconnect-attempts', '2', '--keepalive', '15')) { $psi.ArgumentList.Add($a) }
-    if ($transport.Proxy) { $psi.ArgumentList.Add('--proxy'); $psi.ArgumentList.Add($transport.Proxy) }
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
