@@ -23,7 +23,13 @@ inode probe https://vpn.example.com:443
 inode authenticate https://vpn.example.com:443 --user your-account
 inode connect https://vpn.example.com:443 --user your-account --route 10.20.0.0/16
 inode captcha-test captcha.png
+inode captcha-alphabet
+inode captcha-alphabet --labels reviewed-labels.txt
 ```
+
+`captcha-alphabet` 输出模型权重实际包含的字符表，并单独列出数字和大写字母候选集中尚未支持的字符。候选集不代表网关完整字符集；抓图和模型预测也不能证明完整字符集。`--labels` 文件每行填写一条经人工核实的四字符答案，空行及 `#` 注释可忽略；不得用模型输出直接充当人工答案。发现样本包含模型不支持的字符时，命令打印审计结果并以非零状态退出。
+
+只有从网关配置、生成器源码或管理员获得完整字符集后，才使用 `captcha-alphabet --expected <已确认字符集>` 检查完整覆盖率。该参数是调用者提供的确认信息，不会自动探测网关字符集。当前权重缺少 `M`、`5` 等候选字符；追加字符表或改标签顺序不能增加识别能力，必须使用对应标签重新训练分类层和权重。
 
 密码通过终端隐藏输入。自动化可用 `--password-stdin`，从受保护的秘密管理程序管道输入；不要将密码放在命令参数、脚本或 shell 历史中。
 
