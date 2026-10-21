@@ -13,7 +13,6 @@ use std::{
     time::Duration,
 };
 mod captcha;
-mod captcha_audit;
 mod connection;
 mod readiness;
 use connection::connected;
@@ -42,15 +41,6 @@ enum Commands {
     Connect(ConnectArgs),
     /// [test] Recognize a CAPTCHA image file with the embedded CNN.
     CaptchaTest { file: PathBuf },
-    /// Audit trained CAPTCHA labels against human-verified samples or a known alphabet.
-    CaptchaAlphabet {
-        /// Text file containing one human-verified four-character code per line.
-        #[arg(long)]
-        labels: Option<PathBuf>,
-        /// Exact gateway alphabet, only when independently confirmed.
-        #[arg(long)]
-        expected: Option<String>,
-    },
 }
 #[derive(Args)]
 struct GatewayArgs {
@@ -274,9 +264,6 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Authenticate(args) => login(&args, None).await?,
         Commands::Connect(args) => login(&args.login, Some(&args)).await?,
-        Commands::CaptchaAlphabet { labels, expected } => {
-            captcha_audit::run(labels.as_deref(), expected.as_deref())?;
-        }
         Commands::CaptchaTest { file } => {
             let bytes = std::fs::read(&file)?;
             match captcha_cnn::Model::load().solve(&bytes) {

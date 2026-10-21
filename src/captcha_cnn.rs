@@ -45,12 +45,6 @@ fn rd_tensor(b: &[u8], p: &mut usize) -> Tensor {
 }
 
 impl Model {
-    /// Output labels in the exact order used by the trained classifier.
-    /// Changing this list without retraining would relabel existing outputs.
-    pub fn alphabet(&self) -> String {
-        self.alphabet.iter().collect()
-    }
-
     pub fn load() -> Model {
         let b = MODEL;
         let mut p = 0usize;
