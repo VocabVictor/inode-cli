@@ -5,13 +5,13 @@ use inode_cli::{
     protocol::{self, Session},
 };
 use ipnet::Ipv4Net;
-use url::Url;
 use serde::Serialize;
 use std::{
     io::{self, BufRead, Write},
     path::PathBuf,
     time::Duration,
 };
+use url::Url;
 mod captcha;
 mod connection;
 mod readiness;

@@ -53,21 +53,86 @@ impl Session {
         );
         self.jar
             .set_cookies(&mut headers.get_all("set-cookie").iter(), &url);
-        let reply: serde_json::Value = serde_json::from_slice(&reply)
-            .map_err(|_| anyhow::anyhow!("Unsupported password reminder response"))?;
-        if reply["result"] == "Challenge" && reply["type"] == "CHANGEPWD" {
+        let reply = parse_reply(&reply).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Unsupported password reminder response: {}",
+                describe(&headers, &reply)
+            )
+        })?;
+        if reply.result == "Challenge" && reply.kind == "CHANGEPWD" {
             bail!(
                 "password change required by gateway; user action required; no automatic retries"
             );
         }
         ensure!(
-            reply["result"] == "Success",
+            reply.result == "Success",
             "password reminder continuation rejected: {}; no automatic retries",
-            authentication_summary(reply["errorMsg"].as_str().unwrap_or(""))
+            authentication_summary(&reply.message)
         );
         self.cookie()?;
         Ok(())
     }
+}
+
+struct Reply {
+    result: String,
+    kind: String,
+    message: String,
+}
+
+// The web page receives JSON; some gateways answer the client with the XML login format.
+fn parse_reply(body: &[u8]) -> Option<Reply> {
+    let text = std::str::from_utf8(body)
+        .ok()?
+        .trim_start_matches('\u{feff}')
+        .trim();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
+        let get = |k: &str| v[k].as_str().unwrap_or("").to_owned();
+        return Some(Reply {
+            result: get("result"),
+            kind: get("type"),
+            message: get("errorMsg"),
+        });
+    }
+    let doc = super::discovery::xml(text).ok()?;
+    let field = |name: &str| {
+        doc.root_element()
+            .children()
+            .find(|n| n.has_tag_name(name))
+            .and_then(|n| n.text())
+            .map(|s| s.trim().to_owned())
+    };
+    Some(Reply {
+        result: field("result")?,
+        kind: field("type").unwrap_or_default(),
+        message: super::errors::response_message(&doc),
+    })
+}
+
+// Never echo the body: it can carry credentials or session cookies.
+fn describe(headers: &hyper::HeaderMap, body: &[u8]) -> String {
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("none");
+    let start = body
+        .iter()
+        .find(|b| !b.is_ascii_whitespace())
+        .map(|b| {
+            if b.is_ascii_graphic() {
+                (*b as char).to_string()
+            } else {
+                format!("0x{b:02x}")
+            }
+        })
+        .unwrap_or_else(|| "empty".into());
+    let html = String::from_utf8_lossy(&body[..body.len().min(512)])
+        .to_ascii_lowercase()
+        .contains("<html");
+    format!(
+        "content-type={content_type}, {} bytes, starts with {start}, html={html}",
+        body.len()
+    )
 }
 
 #[cfg(test)]
@@ -87,5 +152,24 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn continuation_reply_accepts_json_and_xml() {
+        for body in [
+            &br#"{"result":"Success"}"#[..],
+            b"\xef\xbb\xbf<data><result>Success</result></data>\r\n",
+            b"  <data><result> Success </result><type></type></data>",
+        ] {
+            assert_eq!(parse_reply(body).unwrap().result, "Success");
+        }
+        let change =
+            parse_reply(b"<data><result>Challenge</result><type>CHANGEPWD</type></data>").unwrap();
+        assert_eq!(
+            (change.result.as_str(), change.kind.as_str()),
+            ("Challenge", "CHANGEPWD")
+        );
+        assert!(parse_reply(b"<html><body>error</body></html>").is_none());
+        assert!(parse_reply(b"").is_none());
     }
 }

@@ -80,9 +80,14 @@ impl Session {
                     timeout(self.timeout, TcpStream::connect((phost, pport))).await??;
                 stream.set_nodelay(true)?;
                 let target = format!("{host}:{port}");
-                let req = format!("CONNECT {target} HTTP/1.1{cr}{lf}Host: {target}{cr}{lf}{cr}{lf}",
-                    cr = '\r', lf = '\n');
-                stream.write_all(req.as_bytes()).await
+                let req = format!(
+                    "CONNECT {target} HTTP/1.1{cr}{lf}Host: {target}{cr}{lf}{cr}{lf}",
+                    cr = '\r',
+                    lf = '\n'
+                );
+                stream
+                    .write_all(req.as_bytes())
+                    .await
                     .context("Cannot send CONNECT to proxy")?;
                 let mut buf: Vec<u8> = Vec::new();
                 let mut chunk = [0u8; 1024];
@@ -100,10 +105,7 @@ impl Session {
                 }
                 let head = String::from_utf8_lossy(&buf);
                 let first = head.lines().next().unwrap_or_default();
-                ensure!(
-                    first.contains(" 200 "),
-                    "Proxy CONNECT failed: {first}"
-                );
+                ensure!(first.contains(" 200 "), "Proxy CONNECT failed: {first}");
                 stream
             }
             None => timeout(self.timeout, TcpStream::connect((host, port))).await??,
